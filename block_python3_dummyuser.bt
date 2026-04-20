@@ -1,0 +1,10 @@
+tracepoint:syscalls:sys_enter_execve
+{
+    $fname = str(args->filename);
+
+    if (uid == 1001 &&
+        strncmp($fname, "/usr/bin/python3", 16) == 0)
+    {
+        printf("%d\n", pid);
+    }
+}

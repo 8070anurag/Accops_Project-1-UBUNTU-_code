@@ -1,0 +1,153 @@
+using System;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+
+namespace App.Net
+{
+    public class SystemMonitorService
+    {
+        private IProcessService service;
+
+        private const double CPU_THRESHOLD = 50;
+        private const double MEMORY_THRESHOLD = 80;
+
+        private HashSet<string> restrictedProcesses =
+            new HashSet<string>();
+
+        public SystemMonitorService(IProcessService s)
+        {
+            service = s;
+        }
+
+        public void StartMonitoring()
+        {
+            Console.WriteLine("[MONITOR STARTED]");
+
+            while (true)
+            {
+                try
+                {
+                    double cpu = GetCPUUsage();
+                    double memory = GetMemoryUsage();
+
+                    Console.WriteLine($"CPU: {cpu}% | MEMORY: {memory}%");
+
+                    if (cpu > CPU_THRESHOLD || memory > MEMORY_THRESHOLD)
+                    {
+                        Console.WriteLine("[ALERT] High usage detected");
+
+                        var processes = GetTopProcesses();
+
+                        foreach (var process in processes)
+                        {
+                            if ((process.CPU > 20 || process.Memory > 20) &&
+                                !restrictedProcesses.Contains(process.Name))
+                            {
+                                Console.WriteLine(
+                                    $"Restricting {process.Name} CPU:{process.CPU}% MEM:{process.Memory}%");
+
+                                service.RestrictAllProcessesByName(
+                                    process.Name);
+
+                                restrictedProcesses.Add(process.Name);
+                            }
+                        }
+                    }
+
+                    Thread.Sleep(5000);
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine("Monitor error: " + ex.Message);
+                }
+            }
+        }
+
+        // FIXED CPU detection
+        private double GetCPUUsage()
+        {
+            string output = RunCommand(
+                "top -bn1 | grep \"Cpu(s)\" | awk '{print 100 - $8}'");
+
+            double.TryParse(output, out double cpu);
+
+            return cpu;
+        }
+
+        private double GetMemoryUsage()
+        {
+            string output =
+                RunCommand("free | grep Mem");
+
+            var parts =
+                output.Split(' ',
+                StringSplitOptions.RemoveEmptyEntries);
+
+            double total = double.Parse(parts[1]);
+            double used = double.Parse(parts[2]);
+
+            return (used / total) * 100;
+        }
+
+        // FIXED — detect both CPU and memory heavy processes
+        private List<ProcessInfo> GetTopProcesses()
+        {
+            var list = new List<ProcessInfo>();
+
+            string output =
+                RunCommand("ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 15");
+
+            var lines = output.Split('\n').Skip(1);
+
+            foreach(var line in lines)
+            {
+                var parts =
+                    line.Split(' ',
+                    StringSplitOptions.RemoveEmptyEntries);
+
+                if(parts.Length >= 4)
+                {
+                    list.Add(new ProcessInfo
+                    {
+                        PID = int.Parse(parts[0]),
+                        Name = parts[1],
+                        CPU = double.Parse(parts[2]),
+                        Memory = double.Parse(parts[3])
+                    });
+                }
+            }
+
+            return list;
+        }
+
+        private string RunCommand(string cmd)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = "-c \"" + cmd + "\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+
+            var process = Process.Start(psi);
+
+            string result =
+                process.StandardOutput.ReadToEnd();
+
+            process.WaitForExit();
+
+            return result.Trim();
+        }
+    }
+
+    public class ProcessInfo
+    {
+        public int PID;
+        public string Name;
+        public double CPU;
+        public double Memory;
+    }
+}

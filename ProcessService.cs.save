@@ -1,0 +1,130 @@
+using System;
+using System.IO;
+using System.Diagnostics;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+
+public class ProcessService : IProcessService
+{
+    // Run normal command
+    private string RunCommand(string command)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            Arguments = "-c \"" + command + "\"",
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+
+        var process = Process.Start(psi);
+        string output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+
+        return output;
+    }
+
+    // Run sudo command
+    private void RunSudoCommand(string command)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            Arguments = "-c \"sudo " + command + "\"",
+            UseShellExecute = false
+        };
+
+        var process = Process.Start(psi);
+        process.WaitForExit();
+    }
+
+    // BLOCK PROCESS USER-SPECIFIC (dummyuser only)
+    public void BlockProcess(string processname)
+    {
+        Console.WriteLine("[INFO] Blocking process for dummyuser: " + processname);
+
+        // Step 1: Get full path of process
+        string processPath = RunCommand("which " + processname);
+
+        if (string.IsNullOrEmpty(processPath))
+        {
+            Console.WriteLine("[ERROR] Process not found");
+            return;
+        }
+
+        Console.WriteLine("[INFO] Process path: " + processPath);
+
+        // Step 2: Get dummyuser UID
+        string dummyUID = RunCommand("id -u dummyuser");
+
+        if (string.IsNullOrEmpty(dummyUID))
+        {
+            Console.WriteLine("[ERROR] dummyuser not found");
+            return;
+        }
+
+        Console.WriteLine("[INFO] dummyuser UID: " + dummyUID);
+
+        // Step 3: Create eBPF script path
+        string scriptPath = "/home/uadmin/block_" + processname + ".bt";
+
+        int len = processPath.Length;
+
+        // Step 4: Create eBPF script
+        string script =
+@"tracepoint:syscalls:sys_enter_execve
+{
+    $fname = str(args->filename);
+
+    if (uid == " + dummyUID + @" &&
+        strncmp($fname, """ + processPath + @""", " + len + @") == 0)
+    {
+        printf(""%d\n"", pid);
+    }
+}";
+
+        File.WriteAllText(scriptPath, script);
+
+        Console.WriteLine("[INFO] eBPF script created at: " + scriptPath);
+
+        // Step 5: Give permission
+        RunSudoCommand("chmod +x " + scriptPath);
+
+        HashSet<int> killedPids = new HashSet<int>();
+
+        // Step 6: Run bpftrace in background
+        Task.Run(() =>
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = "-c \"sudo bpftrace " + scriptPath + "\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+
+            var process = Process.Start(psi);
+
+            Console.WriteLine("[INFO] eBPF monitoring started...");
+
+            while (!process.StandardOutput.EndOfStream)
+            {
+                string line = process.StandardOutput.ReadLine();
+
+                if (int.TryParse(line, out int pid))
+                {
+                    if (killedPids.Contains(pid))
+                        continue;
+
+                    killedPids.Add(pid);
+
+                    Console.WriteLine("[BLOCKED] Killing PID: " + pid);
+
+                    RunSudoCommand("kill -9 " + pid);
+                }
+            }
+        });
+
+        Console.WriteLine("[SUCCESS] Blocking active for dummyuser only.");
+    }
+}

@@ -1,0 +1,19 @@
+namespace App.Net
+{
+    public interface IProcessService
+    {
+        void SuspendProcess(string username);
+        void SuspendProcess(int pid);
+        void ResumeProcess(string username);
+        void ResumeProcess(int pid);
+        void RestrictPronamespace App.Net
+{
+    public interface IProcessService
+    {
+        void SuspendProcess(string username);
+        void ResumeProcess(string username);
+        void RestrictProcessCPU(int processid, string processname);
+        void RestrictProcessMemory(int processid, string processname);
+        void RemoveRestriction(int processid, string processname);
+    }
+}
